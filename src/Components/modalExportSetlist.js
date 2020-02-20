@@ -10,6 +10,7 @@ import { generateSql } from './setlistOptions';
 
 const selectoptions = [
     { value: 'json', label: 'JSON' },
+    { value: 'artist-title-mapped', label: 'Artist - Title' },
     { value: 'songlist', label: 'Rocksmith Song List' },
 ];
 
@@ -78,6 +79,9 @@ class ExportSetlistModal extends React.Component {
         }
         if (this.state.selectedOption.value === "json") {
             this.setlistExportToJSON(this.props.exportSetlistKey);
+        }
+        else if (this.state.selectedOption.value === "artist-title-mapped") {
+            this.setlistExportArtistTitleToText(this.props.exportSetlistKey);
         }
         else {
             if (this.state.selectedSonglist === null) {
@@ -211,20 +215,94 @@ class ExportSetlistModal extends React.Component {
         return songKeys;
     }
 
+    setlistToSongArtistTitle = async (key) => {
+        const setlist = await getSetlistMetaInfo(key);
+        const isgen = setlist.is_generated === "true";
+        const songKeys = []
+        if (isgen) {
+            //eslint-disable-next-line
+            const sql = await generateSql(JSON.parse(setlist.view_sql));
+            try {
+                //eslint-disable-next-line
+                const op = await executeRawSql(sql, true);
+                for (let j = 0; j < op.length; j += 1) {
+                    const arr = op[j];
+
+                    const txt = unescape(arr.artist + " - " + arr.song);
+                    if (!songKeys.includes(txt)) {
+                        songKeys.push(txt);
+                    }
+                }
+            }
+            catch (e) {
+                this.failureMsg("generated setlist returned exception")
+            }
+        }
+        else {
+            //eslint-disable-next-line
+            const op2 = await executeRawSql(`
+                SELECT *
+                FROM songs_owned
+                JOIN ${setlist.key}
+                ON ${setlist.key}.uniqkey = songs_owned.uniqkey
+            `, true);
+            for (let i = 0; i < op2.length; i += 1) {
+                const arr = op2[i];
+
+                const txt = unescape(arr.artist + " - " + arr.song);
+                if (!songKeys.includes(txt)) {
+                    songKeys.push(txt);
+                }
+            }
+        }
+
+        songKeys.sort();
+
+        return songKeys;
+    }
+
     setlistExportToJSON = async (key) => {
         const songKeys = await this.setlistToSongKeys(key);
         const setlist = await getSetlistMetaInfo(key);
 
         if (songKeys.length > 0) {
             const options = {
-                defaultPath: window.remote.app.getPath('documents') + `/${unescape(setlist.name)}_export.json`,
+                defaultPath: window.remote.app.getPath('desktop') + `\\${unescape(setlist.name)}_export.json`,
             }
-            window.remote.dialog.showSaveDialog(null, options, async (path) => {
-                if (path) {
-                    await writeFile(path, JSON.stringify(songKeys));
+
+            window.remote.dialog.showSaveDialog(null, options).then(result => {
+                if (!result.canceled && result.filePath) {
+                    writeFile(result.filePath, JSON.stringify(songKeys));
                     this.successMsg();
                 }
-            })
+            });
+        }
+        else {
+            this.failureMsg("No songs found in setlist")
+        }
+    }
+
+    setlistExportArtistTitleToText = async (key) => {
+        const songKeys = await this.setlistToSongArtistTitle(key);
+        const setlist = await getSetlistMetaInfo(key);
+
+        if (songKeys.length > 0) {
+            const options = {
+                defaultPath: window.remote.app.getPath('desktop') + `\\${unescape(setlist.name)}_export.txt`,
+            }
+
+            window.remote.dialog.showSaveDialog(null, options).then(result => {
+                if (!result.canceled && result.filePath) {
+                    let txt = "";
+
+                    songKeys.forEach((x) => {
+                        txt += x + "\n";
+                    });
+
+                    writeFile(result.filePath, txt);
+                    this.successMsg();
+                }
+            });
         }
         else {
             this.failureMsg("No songs found in setlist")
